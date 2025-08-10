@@ -1,0 +1,786 @@
+Repo structure
+pgsql
+
+
+neilissia/
+  app/
+    (components)/
+      BettySettings.tsx
+    (pwa)/
+      register-sw.tsx
+    api/
+      chat/route.ts
+      webauthn/
+        generate-authentication-options/route.ts
+        verify-authentication/route.ts
+        generate-registration-options/route.ts
+        verify-registration/route.ts
+    login/page.tsx
+    layout.tsx
+    page.tsx
+  lib/
+    kv.ts
+    persona.ts
+    session.ts
+  public/
+    icons/
+      icon-180.png
+      maskable-512.png
+    offline.html
+    manifest.webmanifest
+    robots.txt
+    sw.js
+  middleware.ts
+  next.config.js
+  package.json
+  tsconfig.json
+  README.md
+package.json
+json
+
+{
+  "name": "neilissia",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev -p 5173",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^10.0.0",
+    "@simplewebauthn/server": "^10.0.0",
+    "@upstash/redis": "^1.28.3",
+    "jose": "^5.7.0",
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
+next.config.js
+js
+
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  experimental: { appDir: true },
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+          { key: "Permissions-Policy", value: "geolocation=(), microphone=(), camera=()" }
+        ]
+      }
+    ];
+  }
+};
+module.exports = nextConfig;
+public/manifest.webmanifest
+json
+
+{
+  "name": "Nei’Lissia",
+  "short_name": "Nei’Lissia",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FCFCFE",
+  "theme_color": "#27C4B8",
+  "icons": [
+    { "src": "/icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
+public/robots.txt
+makefile
+Copy
+Edit
+User-agent: *
+Disallow: /
+public/offline.html
+html
+
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Nei’Lissia — Offline</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;
+      background:linear-gradient(135deg,#27C4B8,#E6E7EB 50%,#7C62F3);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial}
+    .card{background:rgba(255,255,255,.78);backdrop-filter:blur(10px);border:1px solid rgba(0,0,0,.08);
+      padding:16px;border-radius:16px;max-width:420px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Nei’Lissia</h1>
+    <p>You’re offline. Breathe. When the connection returns, your app will sync.</p>
+  </div>
+</body>
+</html>
+public/sw.js (Workbox offline cache)
+js
+
+/* global workbox */
+importScripts("https://storage.googleapis.com/workbox-cdn/releases/6.5.4/workbox-sw.js");
+
+workbox.setConfig({ debug: false });
+
+// Precache: keep minimal (offline page)
+workbox.precaching.precacheAndRoute([{ url: "/offline.html", revision: "1" }]);
+
+// HTML pages: NetworkFirst with offline fallback
+workbox.routing.registerRoute(
+  ({ request }) => request.mode === "navigate",
+  new workbox.strategies.NetworkFirst({
+    cacheName: "pages",
+    plugins: [new workbox.expiration.ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 7 * 24 * 3600 })]
+  })
+);
+
+// Static assets (Next.js build)
+workbox.routing.registerRoute(
+  ({ url }) => url.pathname.startsWith("/_next/static/"),
+  new workbox.strategies.StaleWhileRevalidate({ cacheName: "next-static" })
+);
+
+// Images
+workbox.routing.registerRoute(
+  ({ request }) => request.destination === "image",
+  new workbox.strategies.CacheFirst({
+    cacheName: "images",
+    plugins: [new workbox.expiration.ExpirationPlugin({ maxEntries: 60, maxAgeSeconds: 30 * 24 * 3600 })]
+  })
+);
+
+// Google Fonts (if used)
+workbox.routing.registerRoute(
+  ({ url }) => url.origin === "https://fonts.gstatic.com",
+  new workbox.strategies.CacheFirst({ cacheName: "google-fonts", plugins: [new workbox.cacheableResponse.CacheableResponsePlugin({ statuses: [0, 200] })] })
+);
+
+// Offline fallback
+workbox.routing.setCatchHandler(async ({ event }) => {
+  if (event.request.destination === "document") return caches.match("/offline.html");
+  return Response.error();
+});
+
+// Push notifications (optional)
+self.addEventListener("push", (e) => {
+  const data = e.data ? e.data.json() : { title: "Nei’Lissia", body: "Gentle check-in" };
+  e.waitUntil(self.registration.showNotification(data.title, { body: data.body, icon: "/icons/icon-180.png" }));
+});
+app/(pwa)/register-sw.tsx
+tsx
+
+"use client";
+import { useEffect } from "react";
+
+export default function RegisterSW() {
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js");
+    }
+  }, []);
+  return null;
+}
+app/layout.tsx
+tsx
+
+
+export const metadata = {
+  title: "Nei’Lissia",
+  description: "Personal inner-care app for one person.",
+  robots: { index: false, follow: false, nocache: true }
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <meta name="theme-color" content="#27C4B8" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+      </head>
+      <body style={{ margin: 0 }}>{children}</body>
+    </html>
+  );
+}
+middleware.ts (lock everything behind session)
+ts
+
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+const PUBLIC = new Set([
+  "/login",
+  "/manifest.webmanifest",
+  "/sw.js",
+  "/offline.html",
+  "/robots.txt",
+  "/icons",
+  "/api/webauthn/generate-registration-options",
+  "/api/webauthn/verify-registration",
+  "/api/webauthn/generate-authentication-options",
+  "/api/webauthn/verify-authentication"
+]);
+
+export function middleware(req: NextRequest) {
+  const { pathname } = new URL(req.url);
+  if ([...PUBLIC].some((p) => pathname === p || pathname.startsWith(`${p}/`))) return NextResponse.next();
+
+  const token = req.cookies.get("neilissia_session")?.value;
+  if (!token) return NextResponse.redirect(new URL("/login", req.url));
+  return NextResponse.next();
+}
+lib/kv.ts
+ts
+
+import { Redis } from "@upstash/redis";
+export const kv = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!
+});
+lib/session.ts
+ts
+
+import { SignJWT, jwtVerify } from "jose";
+const secret = new TextEncoder().encode(process.env.SESSION_SECRET!);
+
+export async function createSession(userId: string) {
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(userId)
+    .setExpirationTime("60d")
+    .sign(secret);
+}
+export async function verifySession(token: string) {
+  const { payload } = await jwtVerify(token, secret);
+  return payload.sub;
+}
+lib/persona.ts (customizable Betty)
+ts
+
+export type SkinTone = 1 | 2 | 3 | 4 | 5 | 6;
+export type AgeStyle = "teen" | "twenties" | "thirties" | "forties" | "fiftiesPlus";
+
+export type Persona = {
+  displayName: string;
+  pronouns?: string;
+  mood: "soothing" | "upbeat" | "matter-of-fact" | "playful" | "tender";
+  warmth: number;
+  humor: number;
+  directness: number;
+  pacing: "slow" | "steady" | "brisk";
+  styleWords: string[];
+  appearance: { skinTone: SkinTone; age: AgeStyle };
+  tts: { enabled: boolean; voiceName?: string; rate: number; pitch: number; volume: number };
+};
+
+export const DEFAULT_PERSONA: Persona = {
+  displayName: "Betty",
+  mood: "tender",
+  warmth: 9,
+  humor: 3,
+  directness: 6,
+  pacing: "steady",
+  styleWords: ["gentle", "practical", "boundaries-forward"],
+  appearance: { skinTone: 4, age: "twenties" },
+  tts: { enabled: false, rate: 1.0, pitch: 1.0, volume: 1.0 }
+};
+
+function clip(n: number, min = 0, max = 10) { return Math.max(min, Math.min(max, n)); }
+
+export function personaToSystemPrompt(p: Partial<Persona>): string {
+  const name = (p.displayName || "Betty").slice(0, 40);
+  const mood = p.mood || "tender";
+  const warmth = clip(p.warmth ?? 8), humor = clip(p.humor ?? 2), direct = clip(p.directness ?? 6);
+  const pace = p.pacing || "steady";
+  const style = (p.styleWords || []).slice(0, 6).map(x => x.trim().slice(0, 20)).filter(Boolean).join(", ");
+  return [
+    `You are ${name}, a warm, practical astro-therapeutic companion.`,
+    `Tone: ${mood}; warmth ${warmth}/10; humor ${humor}/10; directness ${direct}/10; pace ${pace}.`,
+    style ? `Style words: ${style}.` : ``,
+    `Be brief, kind, actionable. Favor breath, boundaries, salt-water resets, Two-Yes Rule, and gentle pacing.`,
+    `Avoid stereotypes or identity-based assumptions. No medical or legal advice.`
+  ].filter(Boolean).join(" ");
+}
+app/(components)/BettySettings.tsx
+tsx
+
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import type { Persona, SkinTone, AgeStyle } from "@/lib/persona";
+import { DEFAULT_PERSONA } from "@/lib/persona";
+
+const skinToneToHex: Record<SkinTone, string> = { 1:"#F9E6D6",2:"#F0D1B3",3:"#D8A97B",4:"#B97F52",5:"#8F5B3A",6:"#5A3A22" };
+
+export default function BettySettings({ value, onChange }: { value: Persona; onChange: (p: Persona) => void }) {
+  const [p, setP] = useState<Persona>(value || DEFAULT_PERSONA);
+  useEffect(() => onChange(p), [p, onChange]);
+
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    const grab = () => setVoices(window.speechSynthesis.getVoices());
+    grab(); const id = setInterval(grab, 500); setTimeout(grab, 1500);
+    return () => clearInterval(id);
+  }, []);
+  const voiceNames = useMemo(() => voices.map(v => v.name), [voices]);
+
+  const speak = (text: string) => {
+    if (!p.tts.enabled) return;
+    const u = new SpeechSynthesisUtterance(text);
+    const v = voices.find(v => v.name === p.tts.voiceName);
+    if (v) u.voice = v;
+    u.rate = p.tts.rate; u.pitch = p.tts.pitch; u.volume = p.tts.volume;
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  };
+
+  const avatar: React.CSSProperties = {
+    width: 64, height: 64, borderRadius: 16,
+    background: skinToneToHex[p.appearance.skinTone], display:"grid", placeItems:"center",
+    border:"1px solid rgba(0,0,0,.08)", boxShadow:"0 6px 18px rgba(0,0,0,.1)", fontWeight:800
+  };
+
+  return (
+    <div style={{display:"grid",gap:12}}>
+      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+        <div style={avatar}>{(p.displayName||"B").slice(0,1)}</div>
+        <div>
+          <div style={{fontWeight:700}}>{p.displayName || "Betty"}</div>
+          <div style={{fontSize:12,opacity:.75}}>Appearance is avatar-only (not behavior/voice).</div>
+        </div>
+      </div>
+
+      <label>Display name
+        <input style={field} value={p.displayName} onChange={e=>setP({...p, displayName:e.target.value})}/>
+      </label>
+
+      <div style={row}>
+        <label style={col}>Mood
+          <select style={field} value={p.mood} onChange={e=>setP({...p, mood:e.target.value as any})}>
+            {["soothing","upbeat","matter-of-fact","playful","tender"].map(m=> <option key={m}>{m}</option>)}
+          </select>
+        </label>
+        <label style={col}>Pace
+          <select style={field} value={p.pacing} onChange={e=>setP({...p, pacing:e.target.value as any})}>
+            {["slow","steady","brisk"].map(m=> <option key={m}>{m}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div style={row}>
+        <Knob label="Warmth" val={p.warmth} set={n=>setP({...p, warmth:n})}/>
+        <Knob label="Humor" val={p.humor} set={n=>setP({...p, humor:n})}/>
+        <Knob label="Directness" val={p.directness} set={n=>setP({...p, directness:n})}/>
+      </div>
+
+      <label>Style words (comma-separated)
+        <input style={field} value={(p.styleWords||[]).join(", ")} onChange={e=>setP({...p, styleWords:e.target.value.split(",").map(s=>s.trim()).filter(Boolean)})}/>
+      </label>
+
+      <div style={row}>
+        <label style={col}>Skin tone
+          <select style={field} value={p.appearance.skinTone} onChange={e=>setP({...p, appearance:{...p.appearance, skinTone: Number(e.target.value) as SkinTone}})}>
+            {[1,2,3,4,5,6].map(n=> <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <label style={col}>Age style
+          <select style={field} value={p.appearance.age} onChange={e=>setP({...p, appearance:{...p.appearance, age: e.target.value as AgeStyle}})}>
+            {["teen","twenties","thirties","forties","fiftiesPlus"].map(x=> <option key={x} value={x}>{x}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div style={{display:"grid",gap:8}}>
+        <label style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input type="checkbox" checked={p.tts.enabled} onChange={e=>setP({...p, tts:{...p.tts, enabled:e.target.checked}})} />
+          Enable voice playback
+        </label>
+
+        <label>Voice
+          <select style={field} value={p.tts.voiceName || ""} onChange={e=>setP({...p, tts:{...p.tts, voiceName:e.target.value}})} disabled={!p.tts.enabled}>
+            <option value="">(System default)</option>
+            {voiceNames.map(n=> <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+
+        <div style={row}>
+          <Range label="Rate"  val={p.tts.rate}  set={v=>setP({...p, tts:{...p.tts, rate:v}})}  min={0.6} max={1.4} step={0.1} disabled={!p.tts.enabled}/>
+          <Range label="Pitch" val={p.tts.pitch} set={v=>setP({...p, tts:{...p.tts, pitch:v}})} min={0.7} max={1.3} step={0.1} disabled={!p.tts.enabled}/>
+          <Range label="Vol"   val={p.tts.volume}set={v=>setP({...p, tts:{...p.tts, volume:v}})}min={0}   max={1}   step={0.1} disabled={!p.tts.enabled}/>
+        </div>
+
+        <button style={btn} onClick={()=>speak("Hi love, it’s Betty. I’m here—let’s breathe, set one boundary, and do the next kind thing.")} disabled={!p.tts.enabled}>
+          Preview voice
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Knob({label,val,set}:{label:string;val:number;set:(n:number)=>void}) {
+  return <div style={col}><div style={{fontSize:12,opacity:.75}}>{label} {val}/10</div><input type="range" min={0} max={10} value={val} onChange={e=>set(Number(e.target.value))}/></div>;
+}
+function Range({label,val,set,min,max,step,disabled}:{label:string;val:number;set:(n:number)=>void;min:number;max:number;step:number;disabled?:boolean}) {
+  return <div style={col}><div style={{fontSize:12,opacity:.75}}>{label} {val.toFixed(1)}</div><input type="range" min={min} max={max} step={step} value={val} onChange={e=>set(Number(e.target.value))} disabled={disabled}/></div>;
+}
+const row: React.CSSProperties = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:8 };
+const col: React.CSSProperties = { display:"grid", gap:6 };
+const field: React.CSSProperties = { border:"1px solid rgba(0,0,0,.08)", borderRadius:12, padding:"8px 10px", background:"white" };
+const btn: React.CSSProperties = { border:"none", background:"#7C62F3", color:"#fff", borderRadius:12, padding:"10px 12px", fontWeight:600 };
+WebAuthn API routes
+app/api/webauthn/generate-registration-options/route.ts
+
+ts
+
+import { NextResponse } from "next/server";
+import { generateRegistrationOptions } from "@simplewebauthn/server";
+import { kv } from "@/lib/kv";
+
+export async function POST() {
+  const userID = process.env.ALLOWED_USER_ID!;
+  const opts = await generateRegistrationOptions({
+    rpID: process.env.RP_ID!,
+    rpName: process.env.RP_NAME || "Nei’Lissia",
+    userID,
+    userName: userID,
+    attestationType: "none",
+    authenticatorSelection: { userVerification: "preferred", residentKey: "preferred" }
+  });
+  await kv.set(`webauthn:reg:${userID}`, opts.challenge, { ex: 600 });
+  return NextResponse.json(opts);
+}
+app/api/webauthn/verify-registration/route.ts
+
+ts
+
+import { NextRequest, NextResponse } from "next/server";
+import { verifyRegistrationResponse } from "@simplewebauthn/server";
+import { kv } from "@/lib/kv";
+
+export async function POST(req: NextRequest) {
+  const userID = process.env.ALLOWED_USER_ID!;
+  const expectedChallenge = await kv.get<string>(`webauthn:reg:${userID}`);
+  if (!expectedChallenge) return NextResponse.json({ ok:false }, { status: 400 });
+
+  const body = await req.json();
+  const { verified, registrationInfo } = await verifyRegistrationResponse({
+    response: body,
+    expectedChallenge,
+    expectedRPID: process.env.RP_ID!,
+    expectedOrigin: process.env.ORIGIN!,
+    requireUserVerification: true
+  });
+  if (!verified || !registrationInfo) return NextResponse.json({ ok:false }, { status: 400 });
+
+  await kv.set(`webauthn:cred:${userID}`, {
+    credentialID: Buffer.from(registrationInfo.credentialID).toString("base64url"),
+    credentialPublicKey: Buffer.from(registrationInfo.credentialPublicKey).toString("base64url"),
+    counter: registrationInfo.counter
+  });
+  return NextResponse.json({ ok:true });
+}
+app/api/webauthn/generate-authentication-options/route.ts
+
+ts
+
+import { NextResponse } from "next/server";
+import { generateAuthenticationOptions } from "@simplewebauthn/server";
+import { kv } from "@/lib/kv";
+
+export async function POST() {
+  const userID = process.env.ALLOWED_USER_ID!;
+  const cred = await kv.get<any>(`webauthn:cred:${userID}`);
+  const opts = await generateAuthenticationOptions({
+    rpID: process.env.RP_ID!,
+    userVerification: "preferred",
+    allowCredentials: cred ? [{ id: Buffer.from(cred.credentialID, "base64url"), type: "public-key" }] : []
+  });
+  await kv.set(`webauthn:auth:${userID}`, opts.challenge, { ex: 600 });
+  return NextResponse.json(opts);
+}
+app/api/webauthn/verify-authentication/route.ts
+
+ts
+
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAuthenticationResponse } from "@simplewebauthn/server";
+import { kv } from "@/lib/kv";
+import { createSession } from "@/lib/session";
+
+export async function POST(req: NextRequest) {
+  const userID = process.env.ALLOWED_USER_ID!;
+  const cred = await kv.get<any>(`webauthn:cred:${userID}`);
+  const expectedChallenge = await kv.get<string>(`webauthn:auth:${userID}`);
+  if (!cred || !expectedChallenge) return NextResponse.json({ ok:false }, { status: 400 });
+
+  const body = await req.json();
+  const { verified, authenticationInfo } = await verifyAuthenticationResponse({
+    response: body,
+    expectedChallenge,
+    expectedRPID: process.env.RP_ID!,
+    expectedOrigin: process.env.ORIGIN!,
+    authenticator: {
+      credentialID: Buffer.from(cred.credentialID, "base64url"),
+      credentialPublicKey: Buffer.from(cred.credentialPublicKey, "base64url"),
+      counter: cred.counter,
+      transports: ["internal"]
+    },
+    requireUserVerification: true
+  });
+  if (!verified) return NextResponse.json({ ok:false }, { status: 400 });
+
+  await kv.set(`webauthn:cred:${userID}`, { ...cred, counter: authenticationInfo.newCounter });
+  const token = await createSession(userID);
+  const res = NextResponse.json({ ok:true });
+  res.cookies.set("neilissia_session", token, { httpOnly: true, sameSite: "strict", secure: true, path: "/", maxAge: 60 * 24 * 60 * 60 });
+  return res;
+}
+app/api/chat/route.ts (LLM-wired Betty)
+ts
+
+import { NextRequest, NextResponse } from "next/server";
+import { verifySession } from "@/lib/session";
+import { personaToSystemPrompt } from "@/lib/persona";
+
+export async function POST(req: NextRequest) {
+  const token = req.cookies.get("neilissia_session")?.value;
+  if (!token || (await verifySession(token)) !== process.env.ALLOWED_USER_ID) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const { messages, persona } = await req.json();
+  const sys = { role: "system", content: personaToSystemPrompt(persona || {}) };
+  const provider = process.env.LLM_PROVIDER;
+
+  if (provider === "openai") {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: "gpt-4o-mini", temperature: 0.4, max_tokens: 400, messages: [sys, ...messages] })
+    });
+    const j = await r.json();
+    return NextResponse.json({ reply: j.choices?.[0]?.message?.content ?? "…" });
+  }
+
+  if (provider === "anthropic") {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-3-5-sonnet-20240620", max_tokens: 400, temperature: 0.4, messages: [sys, ...messages] })
+    });
+    const j = await r.json();
+    return NextResponse.json({ reply: (j as any).content?.[0]?.text ?? "…" });
+  }
+
+  if (provider === "google") {
+    const prompt = [sys.content, ...messages.map((m: any) => `${m.role}: ${m.content}`)].join("\n");
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }]}] })
+    });
+    const j = await r.json();
+    return NextResponse.json({ reply: j.candidates?.[0]?.content?.parts?.[0]?.text ?? "…" });
+  }
+
+  return NextResponse.json({ reply: "LLM provider not configured." }, { status: 500 });
+}
+app/login/page.tsx (register device → Face ID unlock)
+tsx
+
+"use client";
+import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
+import { useState } from "react";
+
+async function postJSON(url: string, data?: any) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: data ? JSON.stringify(data) : undefined });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export default function Login() {
+  const [status, setStatus] = useState("Register this iPhone/iPad, then unlock with Face ID.");
+
+  const register = async () => {
+    setStatus("Preparing registration…");
+    const opts = await postJSON("/api/webauthn/generate-registration-options");
+    const att = await startRegistration({ optionsJSON: opts });
+    await postJSON("/api/webauthn/verify-registration", att);
+    setStatus("Registered. Now tap Unlock with Face ID.");
+  };
+  const login = async () => {
+    setStatus("Preparing authentication…");
+    const opts = await postJSON("/api/webauthn/generate-authentication-options");
+    const asse = await startAuthentication({ optionsJSON: opts });
+    await postJSON("/api/webauthn/verify-authentication", asse);
+    window.location.href = "/";
+  };
+
+  return (
+    <div style={{minHeight:"100svh",display:"grid",placeItems:"center",
+      background:"linear-gradient(135deg,#27C4B8,#E6E7EB 50%,#7C62F3)",padding:24}}>
+      <div style={{maxWidth:420,width:"100%",background:"rgba(255,255,255,0.78)",backdropFilter:"blur(10px)",
+        border:"1px solid rgba(0,0,0,0.08)",borderRadius:16,padding:16}}>
+        <h1 style={{margin:0,fontSize:24,fontWeight:800}}>Nei’Lissia</h1>
+        <p style={{opacity:0.75,marginTop:8}}>{status}</p>
+        <div style={{display:"flex",gap:8,marginTop:12}}>
+          <button onClick={register} style={btn}>Register this device</button>
+          <button onClick={login} style={btnPrimary}>Unlock with Face ID</button>
+        </div>
+        <p style={{fontSize:12,opacity:.7,marginTop:10}}>Only your registered device can unlock. Private, no passwords.</p>
+      </div>
+    </div>
+  );
+}
+const btn: React.CSSProperties = {border:"1px solid rgba(0,0,0,0.1)",borderRadius:999,padding:"8px 12px",background:"white"};
+const btnPrimary: React.CSSProperties = {...btn, background:"#7C62F3", color:"#fff", border:"none"};
+app/page.tsx (soft gradient + pill tabs + chat using persona)
+tsx
+
+"use client";
+import RegisterSW from "./(pwa)/register-sw";
+import { useEffect, useState } from "react";
+import BettySettings from "./(components)/BettySettings";
+import { DEFAULT_PERSONA, Persona } from "@/lib/persona";
+
+const c = { t:"#27C4B8", s:"#E6E7EB", p:"#7C62F3", ink:"#0E0E11", glass:"rgba(255,255,255,0.78)" };
+const card: React.CSSProperties = { background:c.glass, backdropFilter:"blur(10px)", border:"1px solid rgba(0,0,0,0.08)", borderRadius:16, padding:16, boxShadow:"0 8px 24px rgba(0,0,0,0.08)" };
+const pill = (active:boolean): React.CSSProperties => ({ padding:"8px 14px", borderRadius:999, border:"1px solid rgba(0,0,0,0.08)", background: active ? c.p : "white", color: active ? "white" : c.ink, fontSize:13, fontWeight:600 });
+
+type ChatMsg = { role:"user"|"assistant"; content:string };
+
+export default function Home() {
+  const [tab, setTab] = useState<"Check-in"|"Rituals"|"Journal"|"Dreams"|"Betty"|"Settings">("Check-in");
+  const [persona, setPersona] = useState<Persona>(() => {
+    const raw = localStorage.getItem("neilissia_persona");
+    return raw ? JSON.parse(raw) : DEFAULT_PERSONA;
+  });
+  useEffect(()=>localStorage.setItem("neilissia_persona", JSON.stringify(persona)), [persona]);
+
+  const [msgs,setMsgs]=useState<ChatMsg[]>([{role:"assistant",content:`Hey love, I’m ${persona.displayName}. Do you want grounding (breath), a boundary script, or a tiny ritual?`}]);
+  const [text,setText]=useState("");
+
+  const send = async () => {
+    if(!text.trim()) return;
+    const body = { messages: [...msgs, { role:"user", content:text.trim() }], persona };
+    setMsgs(prev=>[...prev, { role:"user", content:text.trim() }]);
+    setText("");
+    const res = await fetch("/api/chat",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    const j = await res.json();
+    const reply = j.reply || "…";
+    setMsgs(prev=>[...prev, { role:"assistant", content: reply }]);
+
+    if (persona.tts.enabled) {
+      const u = new SpeechSynthesisUtterance(reply);
+      const v = speechSynthesis.getVoices().find(v=>v.name===persona.tts.voiceName);
+      if (v) u.voice = v;
+      u.rate = persona.tts.rate; u.pitch = persona.tts.pitch; u.volume = persona.tts.volume;
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    }
+  };
+
+  return (
+    <div style={{minHeight:"100svh", background:"linear-gradient(135deg,#27C4B8,#E6E7EB 50%,#7C62F3)"}}>
+      <RegisterSW />
+      <div style={{maxWidth:1100, margin:"0 auto", padding:16}}>
+        <header style={{...card, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:24, fontWeight:800}}>Nei’Lissia</div>
+            <div style={{opacity:.75, fontSize:13}}>Soft gradients • pill tabs • private (Face ID)</div>
+          </div>
+          <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+            {(["Check-in","Rituals","Journal","Dreams","Betty","Settings"] as const).map(t=>(
+              <button key={t} onClick={()=>setTab(t)} style={pill(tab===t)}>{t}</button>
+            ))}
+          </div>
+        </header>
+
+        <main style={{display:"grid", gap:16, gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", marginTop:16}}>
+          {tab==="Check-in" && <Section title="Check-in">
+            <p style={{marginTop:0}}>How’s your body right now—tense/loose, hot/cool? Name 3 feelings aloud. Water + 6 long exhales.</p>
+          </Section>}
+
+          {tab==="Rituals" && <Section title="Rituals">
+            <ul><li>Morning: water + 5 breaths • name 3 feelings • Two-Yes before commitments</li>
+                <li>Evening: quick rinse • 3 gratitudes • phone DND</li></ul>
+          </Section>}
+
+          {tab==="Journal" && <Section title="Journal to your inner child">
+            <textarea rows={6} placeholder="I hear you. What do you need right now?"
+              style={{width:"100%",border:"1px solid rgba(0,0,0,0.08)",borderRadius:12,padding:10,background:"white"}}/>
+          </Section>}
+
+          {tab==="Dreams" && <Section title="Dreams">
+            <textarea rows={5} placeholder="Fragments are enough. Who/what appeared? How did you feel?"
+              style={{width:"100%",border:"1px solid rgba(0,0,0,0.08)",borderRadius:12,padding:10,background:"white"}}/>
+          </Section>}
+
+          {tab==="Betty" && <Section title={persona.displayName}>
+            <div style={{height:260, overflowY:"auto", background:"white", border:"1px solid rgba(0,0,0,0.05)", borderRadius:12, padding:8, marginBottom:8}}>
+              {msgs.map((m,i)=>(
+                <div key={i} style={{textAlign:m.role==="user"?"right":"left", margin:"6px 0"}}>
+                  <span style={{display:"inline-block", padding:"8px 10px", borderRadius:12, background: m.role==="user" ? c.t : "#F8F8FB", color: m.role==="user"?"white":c.ink}}>
+                    {m.content}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex", gap:8}}>
+              <input value={text} onChange={e=>setText(e.target.value)} placeholder={`Tell ${persona.displayName} what’s up…`}
+                style={{flex:1, border:"1px solid rgba(0,0,0,0.08)", borderRadius:12, padding:10, background:"white"}}/>
+              <button onClick={send} style={{border:"none",background:c.p,color:"#fff",borderRadius:12,padding:"10px 14px"}}>Send</button>
+            </div>
+          </Section>}
+
+          {tab==="Settings" && <Section title="Betty Settings">
+            <BettySettings value={persona} onChange={setPersona}/>
+          </Section>}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }:{ title:string; children:React.ReactNode }) {
+  return <section style={card}><h2 style={{marginTop:0}}>{title}</h2>{children}</section>;
+}
+README.md (quick start + Vercel)
+md
+
+# Nei’Lissia (private PWA)
+
+Personal inner-care app for one person (your daughter). Passkeys + PWA, offline cache (Workbox), and a customizable companion, Betty.
+
+## Setup
+
+1. Clone this repo and install:
+   ```bash
+   npm i
+Create .env.local:
+
+ini
+
+ORIGIN=https://your-domain.vercel.app
+RP_ID=your-domain.vercel.app
+RP_NAME=Nei’Lissia
+SESSION_SECRET=replace-with-64+char-secret
+ALLOWED_USER_ID=daughter
+
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+
+LLM_PROVIDER=openai   # or anthropic | google
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...
+Dev:
+
+
+npm run dev
